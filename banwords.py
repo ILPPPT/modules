@@ -1,5 +1,5 @@
+import requests
 from .. import utils, loader
-from time import sleep
 
 @loader.tds 
 class BanWordsMod(loader.Module):
@@ -28,6 +28,8 @@ class BanWordsMod(loader.Module):
             words.setdefault("stats", {}) 
         if chatid not in words["stats"]:
             words["stats"].setdefault(chatid, {}) 
+        if "antimat" not in words["stats"][chatid]:
+            words["stats"][chatid].setdefault("antimat", None)
         if args not in words[chatid]:
             if ", " in args:
                 args = args.split(', ')
@@ -42,7 +44,7 @@ class BanWordsMod(loader.Module):
     
     
     async def rmbwcmd(self, message):
-        """Удалить слово из список "Плохих слов". Используй: .rmbw <слово или all/clearall (по желанию)>."""
+        """Удалить слово из список "Плохих слов". Используй: .rmbw <слово или all/clearall (по желанию)>.\nall - удаляет все слова из списка.\nclearall - удаляет все сохраненные данные модуля."""
         words = self.db.get("BanWords", "bws", {})
         args = utils.get_args_raw(message) 
         if not args: return await message.edit("<b>[BanWords]</b> Нет аргументов.")
@@ -61,14 +63,16 @@ class BanWordsMod(loader.Module):
                 words.pop(chatid)
             self.db.set("BanWords", "bws", words)
             await message.edit(f"<b>[BanWords]</b> Из списка чата удалено слово - \"<code>{args}</code>\".")
-        except KeyError: return await message.edit("<b>Этого слова нет в словаре этого чата.</b>") 
+        except (KeyError, ValueError): return await message.edit("<b>Этого слова нет в словаре этого чата.</b>") 
         
     
     async def bwscmd(self, message):
         """Посмотреть список "Плохих слов". Используй: .bws."""
         words = self.db.get("BanWords", "bws", {})
         chatid = str(message.chat_id)
-        try: ls = words[chatid] 
+        try: 
+            ls = words[chatid]
+            if len(ls) == 0: raise KeyError
         except KeyError: return await message.edit("<b>[BanWords]</b> В этом чате нет списка слов.")
         word = ""
         for _ in ls:
@@ -77,18 +81,23 @@ class BanWordsMod(loader.Module):
         
         
     async def bwstatscmd(self, message):
-        """Статистика "Плохих слов". Используй: .bwstats <clear (по желанию)>."""
+        """Статистика "Плохих слов". Используй: .bwstats <clear* (по желанию)>.\n* - сбросить настройки чата."""
         words = self.db.get("BanWords", "bws", {}) 
         chatid = str(message.chat_id)
         args = utils.get_args_raw(message) 
         if args == "clear":
-            words["stats"].pop(chatid)
-            self.db.set("BanWords", "bws", words) 
-            return await message.edit("<b>[BanWords]</b> Статистика пользователей чата сброшена.")
+            try:
+                words["stats"].pop(chatid)
+                words["stats"].setdefault(chatid, {})
+                words["stats"][chatid].setdefault("antimat", None)
+                words["stats"][chatid].setdefault("kick", None) 
+                self.db.set("BanWords", "bws", words) 
+                return await message.edit("<b>[BanWords]</b> Настройки чата сброшены.")
+            except KeyError: return await message.edit("<b>[BanWords]</b> Нет статистики пользователей.")
         w = ""
         try:
             for _ in words["stats"][chatid]:
-                if _ != "kick" and words["stats"][chatid][_] != 0:
+                if _ != "kick" and _ != "antimat" and words["stats"][chatid][_] != 0:
                     user = await message.client.get_entity(int(_)) 
                     w += f'• <a href="tg://user?id={int(_)}">{user.first_name}</a>: <code>{words["stats"][chatid][_]}</code>\n'
             return await message.edit(f"<b>[BanWords]</b> Кто использовал спец.слова:\n\n{w}") 
@@ -96,11 +105,11 @@ class BanWordsMod(loader.Module):
         
     
     async def swbwcmd(self, message):
-        """Переключить режим "Плохих слов". Используй: .swbw"""
-        words = self.db.get("BanWords", "bws", [])
+        """Переключить режим "Плохих слов". Используй: .swbw <antimat (по желанию)>."""
+        words = self.db.get("BanWords", "bws", {})
         args = utils.get_args_raw(message)
         chatid = str(message.chat_id)
-        
+
         if chatid not in words:
             words.setdefault(chatid, [])
         if "stats" not in words:
@@ -109,13 +118,24 @@ class BanWordsMod(loader.Module):
             words["stats"].setdefault(chatid, {})  
         if "kick" not in words["stats"][chatid]:
             words["stats"][chatid].setdefault("kick", None) 
-            
+        if "antimat" not in words["stats"][chatid]:
+            words["stats"][chatid].setdefault("antimat", None)
+
+        if args == "antimat":
+            if words["stats"][chatid]["antimat"] == False or words["stats"][chatid]["antimat"] == None:
+                words["stats"][chatid]["antimat"] = True
+                self.db.set("BanWords", "bws", words)
+                return await message.edit("<b>[BanWords]</b> Режим \"антимат\" включен.")
+            else:
+                words["stats"][chatid]["antimat"] = False
+                self.db.set("BanWords", "bws", words)
+                return await message.edit("<b>[BanWords]</b> Режим \"антимат\" выключен.")
+
         if words["stats"][chatid]["kick"] == False or words["stats"][chatid]["kick"] == None:
             words["stats"][chatid]["kick"] = True
             self.db.set("BanWords", "bws", words) 
             return await message.edit("<b>[BanWords]</b> Режим кик участников включен.\nЛимит: 5 спец.слова.") 
-            
-        elif words["stats"][chatid]["kick"] == True:
+        else: 
             words["stats"][chatid]["kick"] = False
             self.db.set("BanWords", "bws", words)
             return await message.edit(f"<b>[BanWords]</b> Режим кик участников выключен.")
@@ -123,27 +143,30 @@ class BanWordsMod(loader.Module):
             
     async def watcher(self, message):
         """мда"""
-        if message.sender_id == (await message.client.get_me()).id: return
-        words = self.db.get("BanWords", "bws", [])
-        chatid = str(message.chat_id)
-        userid = str(message.sender_id) 
-        user = await message.client.get_entity(int(userid)) 
-        if chatid not in str(words): return 
-        if userid not in words["stats"][chatid]:
-            words["stats"][chatid].setdefault(userid, 0)
-        ls = words[chatid]
-        for _ in ls:
-            if _ in message.text.lower().split():
-                count = words["stats"][chatid][userid]
-                words["stats"][chatid].update({userid: count + 1})
-                self.db.set("BanWords", "bws", words)
-                if "жаба" in words[chatid]:
-                    sleep(35)
-                if "kick" in words["stats"][chatid]:
+        try:
+            if message.sender_id == (await message.client.get_me()).id: return
+            words = self.db.get("BanWords", "bws", {})
+            chatid = str(message.chat_id)
+            userid = str(message.sender_id) 
+            user = await message.client.get_entity(int(userid)) 
+            if chatid not in str(words): return 
+            if userid not in words["stats"][chatid]:
+                words["stats"][chatid].setdefault(userid, 0)
+            if words["stats"][chatid]["antimat"] == True:
+                r = requests.get("https://raw.githubusercontent.com/ILPPPT/modules/main/9447.txt")
+                ls = r.text.split(', ')
+            else: 
+                ls = words[chatid]
+            for _ in ls:
+                if _ in message.text.lower().split():
+                    count = words["stats"][chatid][userid]
+                    words["stats"][chatid].update({userid: count + 1})
+                    self.db.set("BanWords", "bws", words) 
                     if words["stats"][chatid]["kick"] == True:
-                       if count == 5:
-                           await message.client.kick_participant(int(chatid), int(userid))
-                           words["stats"][chatid].pop(userid) 
-                           self.db.set("BanWords", "bws", words) 
-                           await message.respond(f"<b>[BanWords]</b> {user.first_name} достиг лимит (5) спец.слова, и был кикнут из чата.")
-                await message.client.delete_messages(message.chat_id, message.id)
+                        if count == 5:
+                            await message.client.kick_participant(int(chatid), int(userid))
+                            words["stats"][chatid].pop(userid) 
+                            self.db.set("BanWords", "bws", words) 
+                            await message.respond(f"<b>[BanWords]</b> {user.first_name} достиг лимит (5) спец.слова, и был кикнут из чата.")
+                    await message.client.delete_messages(message.chat_id, message.id)
+        except (AttributeError, TypeError): pass
